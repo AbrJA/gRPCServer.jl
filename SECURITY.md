@@ -123,7 +123,7 @@ Security vulnerabilities in these dependencies may affect gRPCServer.jl. We moni
 
 ## Audit Status
 
-This project has not yet undergone a formal security audit. See [ROADMAP.md](ROADMAP.md) for plans regarding security review.
+This project has not yet undergone a formal security audit. Security review plans will be documented in this repository once available.
 
 ## Acknowledgments
 
