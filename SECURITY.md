@@ -14,7 +14,7 @@ We take security vulnerabilities seriously. If you discover a security issue, pl
 
 **Please do NOT report security vulnerabilities through public GitHub issues.**
 
-Instead, please report them via email to the maintainers. You can find maintainer contact information in the [CONTRIBUTORS.md](CONTRIBUTORS.md) file.
+Instead, please report them using GitHub's private security advisory system: go to this repository's **Security** tab and click **"Report a vulnerability"** to open a private report with the maintainers.
 
 When reporting, please include:
 
