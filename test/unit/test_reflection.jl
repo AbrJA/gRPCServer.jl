@@ -196,6 +196,35 @@ using ProtoBuf: OneOf
         @test fd isa Vector{UInt8}
     end
 
+    @testset "generate_minimal_file_descriptor qualifies packaged message references" begin
+        struct PlainReq
+            value::String
+        end
+
+        struct PlainResp
+            result::String
+        end
+
+        descriptor = ServiceDescriptor(
+            "streaming.PlainService",
+            Dict(
+                "Call" => MethodDescriptor(
+                    "Call",
+                    MethodType.UNARY,
+                    PlainReq,
+                    PlainResp,
+                    (ctx, req) -> PlainResp(req.value)
+                )
+            ),
+            nothing
+        )
+
+        fd = gRPCServer.generate_minimal_file_descriptor(descriptor)
+        text = String(fd)
+        @test occursin("streaming.PlainReq", text)
+        @test occursin("streaming.PlainResp", text)
+    end
+
     @testset "handle_reflection_request - file_containing_symbol with no descriptor" begin
         # Test that we get a valid file descriptor response (not an error)
         # when a service exists but has no explicit file descriptor

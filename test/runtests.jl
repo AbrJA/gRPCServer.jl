@@ -58,6 +58,12 @@ using .TestUtils
     # Interoperability tests
     include("interop/test_hpack_interop.jl")
 
+    # Backend comparison tests
+    @testset "Backend Comparison Tests" begin
+        include("backend_comparison/test_backends.jl")
+        include("backend_comparison/test_features.jl")
+    end
+
     # Basic module tests
     @testset "Module loads correctly" begin
         @test isdefined(gRPCServer, :GRPCServer)

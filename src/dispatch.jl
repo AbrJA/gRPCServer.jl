@@ -1,6 +1,7 @@
 # Method dispatch and service registration for gRPCServer.jl
 
 using ProtoBuf
+import ProtoBuf as PB
 
 """
     MethodDescriptor
@@ -498,6 +499,13 @@ function deserialize_message(data::Vector{UInt8}, type_name::String)
         decoder = ProtoBuf.ProtoDecoder(io)
         return ProtoBuf.decode(decoder, julia_type)
     catch e
+        if _supports_generic_proto_fallback(julia_type)
+            try
+                return _generic_deserialize_message(data, julia_type)
+            catch fallback_error
+                throw(GRPCError(StatusCode.INVALID_ARGUMENT, "Failed to deserialize $type_name: $(sprint(showerror, fallback_error))"))
+            end
+        end
         throw(GRPCError(StatusCode.INVALID_ARGUMENT, "Failed to deserialize $type_name: $(sprint(showerror, e))"))
     end
 end
@@ -523,9 +531,249 @@ function serialize_message(message)::Vector{UInt8}
         ProtoBuf.encode(encoder, message)
         return take!(msg_io)
     catch e
+        if _supports_generic_proto_fallback(typeof(message))
+            try
+                return _generic_serialize_message(message)
+            catch fallback_error
+                @error "Failed to serialize message" exception=(fallback_error, catch_backtrace())
+                return UInt8[]
+            end
+        end
         @error "Failed to serialize message" exception=(e, catch_backtrace())
         return UInt8[]
     end
+end
+
+function _supports_generic_proto_fallback(T::Type)::Bool
+    return !isempty(fieldnames(T))
+end
+
+function _field_numbers_for_type(T::Type)
+    try
+        fn = PB.field_numbers(T)
+        if !isempty(fn)
+            return fn
+        end
+    catch
+    end
+    # Fallback: assign sequential field numbers based on struct field order
+    names = fieldnames(T)
+    values = Tuple(1:length(names))
+    return NamedTuple{names}(values)
+end
+
+function _field_number_lookup(T::Type)::Dict{Int, Symbol}
+    field_nums = _field_numbers_for_type(T)
+    lookup = Dict{Int, Symbol}()
+    for name in keys(field_nums)
+        lookup[Int(getfield(field_nums, name))] = name
+    end
+    return lookup
+end
+
+function _wire_type_for_field_type(T::Type)::UInt8
+    if T <: AbstractString || T <: Vector{UInt8}
+        return 0x02
+    elseif T <: Bool || T <: Integer
+        return 0x00
+    elseif T <: Float64
+        return 0x01
+    elseif T <: Float32
+        return 0x05
+    end
+    throw(ArgumentError("Unsupported protobuf field type: $T"))
+end
+
+function _encode_varint(value::UInt64)::Vector{UInt8}
+    buf = UInt8[]
+    current = value
+    while current >= 0x80
+        push!(buf, UInt8((current & 0x7f) | 0x80))
+        current >>= 7
+    end
+    push!(buf, UInt8(current))
+    return buf
+end
+
+function _encode_signed_varint(value::Integer)::Vector{UInt8}
+    signed = Int64(value)
+    return _encode_varint(reinterpret(UInt64, signed))
+end
+
+function _read_varint(data::Vector{UInt8}, index::Int)
+    value = UInt64(0)
+    shift = 0
+    current = index
+    while current <= length(data)
+        byte = data[current]
+        value |= UInt64(byte & 0x7f) << shift
+        current += 1
+        if (byte & 0x80) == 0
+            return value, current
+        end
+        shift += 7
+        if shift > 63
+            throw(ArgumentError("Malformed protobuf varint"))
+        end
+    end
+    throw(ArgumentError("Unexpected EOF while reading protobuf varint"))
+end
+
+function _skip_field(data::Vector{UInt8}, index::Int, wire_type::UInt8)
+    if wire_type == 0x00
+        _, next_index = _read_varint(data, index)
+        return next_index
+    elseif wire_type == 0x01
+        next_index = index + 8
+    elseif wire_type == 0x02
+        len, cursor = _read_varint(data, index)
+        next_index = cursor + Int(len)
+    elseif wire_type == 0x05
+        next_index = index + 4
+    else
+        throw(ArgumentError("Unsupported protobuf wire type: $wire_type"))
+    end
+
+    if next_index - 1 > length(data)
+        throw(ArgumentError("Unexpected EOF while skipping protobuf field"))
+    end
+    return next_index
+end
+
+function _default_field_value(T::Type)
+    if T <: AbstractString
+        return ""
+    elseif T <: Vector{UInt8}
+        return UInt8[]
+    elseif T <: Bool
+        return false
+    elseif T <: Float64 || T <: Float32
+        return zero(T)
+    elseif T <: Integer
+        return zero(T)
+    end
+    throw(ArgumentError("Unsupported protobuf field type: $T"))
+end
+
+function _decode_field_value(data::Vector{UInt8}, index::Int, field_type::Type, wire_type::UInt8)
+    if field_type <: AbstractString
+        wire_type == 0x02 || throw(ArgumentError("Expected length-delimited string field"))
+        len, cursor = _read_varint(data, index)
+        end_index = cursor + Int(len) - 1
+        end_index <= length(data) || throw(ArgumentError("Unexpected EOF while reading string field"))
+        return String(data[cursor:end_index]), end_index + 1
+    elseif field_type <: Vector{UInt8}
+        wire_type == 0x02 || throw(ArgumentError("Expected length-delimited bytes field"))
+        len, cursor = _read_varint(data, index)
+        end_index = cursor + Int(len) - 1
+        end_index <= length(data) || throw(ArgumentError("Unexpected EOF while reading bytes field"))
+        return copy(data[cursor:end_index]), end_index + 1
+    elseif field_type <: Bool
+        wire_type == 0x00 || throw(ArgumentError("Expected varint bool field"))
+        value, next_index = _read_varint(data, index)
+        return value != 0, next_index
+    elseif field_type <: Int32
+        wire_type == 0x00 || throw(ArgumentError("Expected varint int32 field"))
+        value, next_index = _read_varint(data, index)
+        return reinterpret(Int32, UInt32(value)), next_index
+    elseif field_type <: Int64
+        wire_type == 0x00 || throw(ArgumentError("Expected varint int64 field"))
+        value, next_index = _read_varint(data, index)
+        return reinterpret(Int64, value), next_index
+    elseif field_type <: Int
+        wire_type == 0x00 || throw(ArgumentError("Expected varint int field"))
+        value, next_index = _read_varint(data, index)
+        return Int(reinterpret(Int64, value)), next_index
+    elseif field_type <: UInt32
+        wire_type == 0x00 || throw(ArgumentError("Expected varint uint32 field"))
+        value, next_index = _read_varint(data, index)
+        return UInt32(value), next_index
+    elseif field_type <: UInt64
+        wire_type == 0x00 || throw(ArgumentError("Expected varint uint64 field"))
+        value, next_index = _read_varint(data, index)
+        return value, next_index
+    elseif field_type <: Float64
+        wire_type == 0x01 || throw(ArgumentError("Expected fixed64 field"))
+        index + 7 <= length(data) || throw(ArgumentError("Unexpected EOF while reading float64 field"))
+        raw = reinterpret(UInt64, only(reinterpret(Float64, data[index:index+7])))
+        return reinterpret(Float64, raw), index + 8
+    elseif field_type <: Float32
+        wire_type == 0x05 || throw(ArgumentError("Expected fixed32 field"))
+        index + 3 <= length(data) || throw(ArgumentError("Unexpected EOF while reading float32 field"))
+        raw = reinterpret(UInt32, only(reinterpret(Float32, data[index:index+3])))
+        return reinterpret(Float32, raw), index + 4
+    end
+
+    throw(ArgumentError("Unsupported protobuf field type: $field_type"))
+end
+
+function _encode_field_value(value, field_type::Type)::Vector{UInt8}
+    if field_type <: AbstractString
+        bytes = Vector{UInt8}(String(value))
+        return vcat(_encode_varint(UInt64(length(bytes))), bytes)
+    elseif field_type <: Vector{UInt8}
+        bytes = Vector{UInt8}(value)
+        return vcat(_encode_varint(UInt64(length(bytes))), bytes)
+    elseif field_type <: Bool
+        return _encode_varint(value ? UInt64(1) : UInt64(0))
+    elseif field_type <: Int32 || field_type <: Int64 || field_type <: Int
+        return _encode_signed_varint(value)
+    elseif field_type <: UInt32 || field_type <: UInt64
+        return _encode_varint(UInt64(value))
+    elseif field_type <: Float64
+        return collect(reinterpret(UInt8, [Float64(value)]))
+    elseif field_type <: Float32
+        return collect(reinterpret(UInt8, [Float32(value)]))
+    end
+
+    throw(ArgumentError("Unsupported protobuf field type: $field_type"))
+end
+
+function _generic_deserialize_message(data::Vector{UInt8}, T::Type)
+    values = Dict{Symbol, Any}()
+    number_lookup = _field_number_lookup(T)
+    index = 1
+
+    while index <= length(data)
+        tag, next_index = _read_varint(data, index)
+        field_number = Int(tag >> 3)
+        wire_type = UInt8(tag & 0x07)
+        field_name = get(number_lookup, field_number, nothing)
+
+        if field_name === nothing
+            index = _skip_field(data, next_index, wire_type)
+            continue
+        end
+
+        field_type = fieldtype(T, field_name)
+        field_value, index = _decode_field_value(data, next_index, field_type, wire_type)
+        values[field_name] = field_value
+    end
+
+    ordered_values = Any[]
+    for field_name in fieldnames(T)
+        field_type = fieldtype(T, field_name)
+        push!(ordered_values, get(values, field_name, _default_field_value(field_type)))
+    end
+
+    return T(ordered_values...)
+end
+
+function _generic_serialize_message(message)::Vector{UInt8}
+    T = typeof(message)
+    field_nums = _field_numbers_for_type(T)
+    encoded = UInt8[]
+
+    for field_name in fieldnames(T)
+        field_type = fieldtype(T, field_name)
+        field_number = Int(getfield(field_nums, field_name))
+        wire_type = _wire_type_for_field_type(field_type)
+        tag = UInt64((field_number << 3) | wire_type)
+        append!(encoded, _encode_varint(tag))
+        append!(encoded, _encode_field_value(getfield(message, field_name), field_type))
+    end
+
+    return encoded
 end
 
 """

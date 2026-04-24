@@ -137,7 +137,7 @@ export HEALTH_DESCRIPTOR, REFLECTION_DESCRIPTOR
 export has_health_descriptor, has_reflection_descriptor
 
 # HTTP/2 Backend Abstraction
-export AbstractHTTP2Backend, PureHTTP2Backend, create_connection
+export AbstractHTTP2Backend, PureHTTP2Backend, Nghttp2Backend, create_connection
 
 # HTTP/2 Stream State (for advanced use cases)
 export can_send, StreamError

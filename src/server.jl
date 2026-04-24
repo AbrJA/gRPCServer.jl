@@ -562,8 +562,8 @@ function handle_connection(server::GRPCServer, client)
 
         @debug "New connection" peer=peer
 
-        # Create HTTP/2 connection manager via backend
-        conn = create_connection(server.http2_backend)
+        # Use invokelatest so extension-defined backend methods are visible even if loaded after initial compilation.
+        conn = Base.invokelatest(create_connection, server.http2_backend)
 
         # Read and validate client connection preface
         preface_data = read_connection_preface(client)
@@ -920,6 +920,13 @@ function process_stream_request!(server::GRPCServer, conn::HTTP2Connection,
     end
 
     service, method_desc = result
+
+    # For unary and server streaming, we must wait for END_STREAM before processing
+    # to avoid double-dispatch when the empty END_STREAM data frame arrives later.
+    if (method_desc.method_type == MethodType.UNARY || method_desc.method_type == MethodType.SERVER_STREAMING) && !stream.end_stream_received
+        @debug "Unary/Server streaming: waiting for END_STREAM" method=method_path
+        return  # Don't process yet, wait for END_STREAM
+    end
 
     # For client streaming, we must wait for END_STREAM before processing
     # because all client messages need to be collected first.
@@ -1685,6 +1692,26 @@ function generate_minimal_file_descriptor(service::ServiceDescriptor)::Vector{UI
         end
     end
 
+    function field_numbers_for_descriptor(julia_type::Type)
+        try
+            fn = PB.field_numbers(julia_type)
+            if !isempty(fn)
+                return fn
+            end
+        catch
+        end
+        names = fieldnames(julia_type)
+        values = Tuple(1:length(names))
+        return NamedTuple{names}(values)
+    end
+
+    function qualify_message_type(type_name::String)
+        if isempty(package_name) || occursin('.', type_name)
+            return type_name
+        end
+        return string(package_name, ".", type_name)
+    end
+
     # Helper to build a DescriptorProto for a message type
     function build_message_descriptor(msg_type::AbstractString, julia_type::Union{Type, Nothing})
         msg_buf = IOBuffer()
@@ -1701,7 +1728,7 @@ function generate_minimal_file_descriptor(service::ServiceDescriptor)::Vector{UI
         if julia_type !== nothing
             try
                 field_names = fieldnames(julia_type)
-                field_nums = PB.field_numbers(julia_type)
+                field_nums = field_numbers_for_descriptor(julia_type)
 
                 for fname in field_names
                     field_buf = IOBuffer()
@@ -1773,11 +1800,11 @@ function generate_minimal_file_descriptor(service::ServiceDescriptor)::Vector{UI
         write_string_field(method_buf, 1, String(method_name))
 
         # MethodDescriptorProto field 2: input_type (fully qualified with leading dot)
-        input_type = "." * method.input_type
+        input_type = "." * qualify_message_type(method.input_type)
         write_string_field(method_buf, 2, input_type)
 
         # MethodDescriptorProto field 3: output_type (fully qualified with leading dot)
-        output_type = "." * method.output_type
+        output_type = "." * qualify_message_type(method.output_type)
         write_string_field(method_buf, 3, output_type)
 
         # MethodDescriptorProto field 5: client_streaming (bool)

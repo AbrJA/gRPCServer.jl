@@ -8,6 +8,7 @@ Base64 = "2a0f44e3-6c83-55bd-87e4-b1978d98bd5f"
 CodecZlib = "944b1d66-785c-5afd-91f1-9de20f533193"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Logging = "56ddb016-857b-54e1-b83d-db4d58db5568"
+Nghttp2Wrapper = "aac3f40a-7475-434e-9d89-bbdc1574c652"
 PrecompileTools = "aea7be01-6a6a-4083-8856-8a6e6704d82a"
 ProtoBuf = "3349acd9-ac6a-5e09-bcdb-63829b23a429"
 PureHTTP2 = "7d1e1b98-28e7-4969-8df9-5a308937986a"
@@ -16,9 +17,13 @@ Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 TranscodingStreams = "3bb67fe8-82b1-5028-8e26-92a6c54297fa"
 UUIDs = "cf7118a7-6976-5b1a-9a39-7adc72f591a4"
 
+[extensions]
+Nghttp2BackendExt = "Nghttp2Wrapper"
+
 [compat]
 CodecZlib = "0.7"
 Coverage = "1.8"
+Nghttp2Wrapper = "0.2.0"
 PrecompileTools = "1"
 ProtoBuf = "1.2"
 PureHTTP2 = "0.5"

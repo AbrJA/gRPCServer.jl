@@ -144,6 +144,14 @@ using gRPCServer
         # serialize_message now returns raw protobuf bytes (no Length-Prefixed header)
         # The gRPC framing is added by server.jl encode_grpc_message
         @test result == data
+
+        struct PlainRequest
+            message::String
+            count::Int
+        end
+
+        encoded = gRPCServer.serialize_message(PlainRequest("hello", 3))
+        @test !isempty(encoded)
     end
 
     @testset "deserialize_message" begin
@@ -157,5 +165,19 @@ using gRPCServer
         result = gRPCServer.deserialize_message(empty_data, "grpc.health.v1.HealthCheckRequest")
         @test result isa HealthCheckRequest
         @test result.service == ""
+
+        struct PlainRequest
+            message::String
+            count::Int
+        end
+
+        type_registry = gRPCServer.get_type_registry()
+        type_registry["test.PlainRequest"] = PlainRequest
+
+        encoded = gRPCServer.serialize_message(PlainRequest("hello", 3))
+        decoded = gRPCServer.deserialize_message(encoded, "test.PlainRequest")
+        @test decoded isa PlainRequest
+        @test decoded.message == "hello"
+        @test decoded.count == 3
     end
 end

@@ -54,13 +54,54 @@ function handle_reflection_request(
             OneOf(:list_services_response, list_response)
         )
     elseif request.message_request !== nothing && request.message_request.name === :file_containing_symbol
-        # Find file descriptor containing symbol
+        # Find file descriptor containing symbol (service name or message type name)
         symbol = request.message_request[]::String
+        @warn "reflection: file_containing_symbol" symbol
+        @warn "  registry has services" service_keys = collect(keys(registry.services))
 
-        # Look up service
+        # First: direct service lookup by exact service name
         service = get_service(registry, symbol)
+        @warn "  direct lookup result" service_name = (service === nothing ? "nothing" : service.name)
+
+        # Second: if not a service name, look for a service whose package matches the symbol's package.
+        # This handles message type lookups like "streaming.EventFilter" → find service "streaming.File".
         if service === nothing
-            # Symbol truly not found
+            symbol_parts = split(symbol, ".")
+            @warn "  symbol_parts" symbol_parts
+            if length(symbol_parts) > 1
+                symbol_package = join(symbol_parts[1:end-1], ".")
+                @warn "  searching by package" symbol_package
+                for (_, svc) in registry.services
+                    svc_parts = split(svc.name, ".")
+                    svc_package = length(svc_parts) > 1 ? join(svc_parts[1:end-1], ".") : ""
+                    @warn "    checking service" svc_name=svc.name svc_package
+                    if svc_package == symbol_package
+                        @warn "    MATCH FOUND"
+                        service = svc
+                        break
+                    end
+                end
+            end
+        end
+
+        # Third: check if the symbol matches a method input/output type across all services
+        if service === nothing
+            for (_, svc) in registry.services
+                found = false
+                for (_, method) in svc.methods
+                    if method.input_type == symbol || method.output_type == symbol
+                        found = true
+                        break
+                    end
+                end
+                if found
+                    service = svc
+                    break
+                end
+            end
+        end
+
+        if service === nothing
             error_resp = ErrorResponse(Int32(5), "Symbol not found: $symbol")  # NOT_FOUND = 5
             return ServerReflectionResponse(
                 request.host,

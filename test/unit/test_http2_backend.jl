@@ -17,6 +17,11 @@ using PureHTTP2
         @test conn isa PureHTTP2.HTTP2Connection
     end
 
+    @testset "Nghttp2Backend type" begin
+        @test Nghttp2Backend <: AbstractHTTP2Backend
+        @test !isabstracttype(Nghttp2Backend)
+    end
+
     @testset "PureHTTP2 exports required types" begin
         # Connection types
         @test isdefined(PureHTTP2, :HTTP2Connection)

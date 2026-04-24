@@ -29,6 +29,16 @@ including HPACK header compression (RFC 7541), stream management, and flow contr
 struct PureHTTP2Backend <: AbstractHTTP2Backend end
 
 """
+    Nghttp2Backend <: AbstractHTTP2Backend
+
+Optional HTTP/2 backend using Nghttp2Wrapper.jl.
+
+This backend delegates HTTP/2 operations to the C-based nghttp2 library via Nghttp2Wrapper.jl.
+Requires the `Nghttp2Wrapper` package to be loaded in the current environment to function.
+"""
+struct Nghttp2Backend <: AbstractHTTP2Backend end
+
+"""
     create_connection(backend::AbstractHTTP2Backend)
 
 Create a new HTTP/2 connection using the specified backend.
